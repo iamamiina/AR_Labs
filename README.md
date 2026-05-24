@@ -1,63 +1,41 @@
-# Algorithmic Robots World
+# Succulence Rover Setup and Launch Guide
 
-This repo provides multiple containers to work with,
+Follow the setup instructions from the official repository to start either the simulation Docker environment or the physical robot Docker environment:
 
-- Turtlebot4 Physical robots
-- Simulation environment depicting a Mars surface
-- Jupyter Notebook exploring basic concepts
+https://github.com/CollaborativeRoboticsLab/algorithmic-robots-world
 
-[More information on Containers and Usage](./docs/containers.md)
+After the environment is running:
 
-## Install Docker
-
-Follow the official instructions [here](https://docs.docker.com/engine/install/)
-
-## Clone the repo
-
-On the terminal run the following command to clone the repo
-
-```sh
-git clone https://github.com/CollaborativeRoboticsLab/algorithmic-robots-world.git
-```
-
-## Configure the parameters
-
-Required environmental variables need to be in a `.env` file. An `example.env` file is available. Rename that file to `.env` and update the values as required.
-
-[More information on Parameters](./docs/parameters.md)
-
-
-## Doing custom work
-
-Use the provided web based code server to develop your work.
-
-[More information on Code Server](./docs/development.md)
-
-## Quick commands
-
-### Start Simulation environment
+1. Connect to the TurtleBot.
+2. Open the VS Code workspace.
+3. Edit `params_physical.yaml` as needed.
+4. Navigate to the workspace:
 
 ```bash
-cd algorithmic-robots-world
-docker compose -f compose-simulation.yaml pull
-xhost +local:root
-docker compose -f compose-simulation.yaml up
+cd succulence_ws
 ```
 
-### Start Physical robot environment
+5. Build the workspace and source the setup file:
 
 ```bash
-cd algorithmic-robots-world
-docker compose -f compose-physical.yaml pull
-xhost +local:root
-docker compose -f compose-physical.yaml up
+colcon build
+source install/setup.bash
 ```
 
-### Start Algorithmic Robotics Labs
+6. In the first terminal, launch the mission:
 
 ```bash
-cd algorithmic-robots-world
-docker compose -f compose-jupyter.yaml pull
-xhost +local:root
-docker compose -f compose-jupyter.yaml up
+ros2 launch succulence_rover_ros mission_physical.launch.py
+```
+
+7. In a second terminal, start RViz:
+
+```bash
+rviz2
+```
+
+8. Open the RViz configuration file:
+
+```text
+succulence_slam_physical.rviz
 ```
