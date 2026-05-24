@@ -1,4 +1,14 @@
 code-server/
-workspace/
 rviz-config/
 .env
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store

@@ -11,6 +11,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid as OccupancyGridMsg, Odometry, Path
 from geometry_msgs.msg import PoseStamped, Quaternion
+from scipy import ndimage
 from scipy.spatial.transform import Rotation
 
 from .astar import astar_search, inflate_obstacles
@@ -53,6 +54,18 @@ class PlannerNode(Node):
         self.consecutive_failures = 0
 
         self.path_pub = self.create_publisher(Path, plan_topic, 10)
+        # Debug topic: publishes the inflated `blocked` grid as an OccupancyGrid
+        # so you can see in RViz exactly what A* sees. Inflated cells show as
+        # occupied (black), unknown cells remain unknown (dark gray), free cells
+        # stay free (light). Add this topic as a separate Map display in RViz.
+        self.inflated_pub = self.create_publisher(
+            OccupancyGridMsg, plan_topic + '/inflated', 10)
+        # Debug topic: publishes the set of cells reachable from the rover
+        # under A*'s own movement rules (8-connectivity + anti-corner-cutting).
+        # Only published when A* fails with "graph disconnected" — the boundary
+        # of the reachable region tells you exactly where A* loses connectivity.
+        self.reachable_pub = self.create_publisher(
+            OccupancyGridMsg, plan_topic + '/reachable', 10)
         self.create_subscription(OccupancyGridMsg, map_topic, self._map_cb, 10)
         self.create_subscription(Odometry, odom_topic, self._odom_cb, 10)
         self.create_timer(self.replan_period, self._replan)
@@ -77,6 +90,37 @@ class PlannerNode(Node):
         y = info.origin.position.y + (row + 0.5) * info.resolution
         return x, y
 
+    def _clear_halo(self, blocked: np.ndarray, grid: np.ndarray,
+                    center: tuple[int, int]):
+        # Clear the inflation halo around `center` (start or goal). Anything
+        # near `center` that's blocked purely because of inflation gets freed;
+        # actually-occupied cells (real walls) stay blocked. Used to let A*
+        # plan from a rover stuck inside a halo and to plan TO a goal whose
+        # halo has been overrun as the map fills in.
+        radius = self.inflation_radius
+        r0 = max(0, center[0] - radius)
+        r1 = min(blocked.shape[0], center[0] + radius + 1)
+        c0 = max(0, center[1] - radius)
+        c1 = min(blocked.shape[1], center[1] + radius + 1)
+        sub_grid = grid[r0:r1, c0:c1]
+        sub = sub_grid >= self.occ_threshold
+        if self.unknown_as_obstacle:
+            sub |= sub_grid < 0
+        blocked[r0:r1, c0:c1] = sub
+
+    @staticmethod
+    def _has_free_neighbour(blocked: np.ndarray, cell: tuple[int, int]) -> bool:
+        r, c = cell
+        h, w = blocked.shape
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and not blocked[nr, nc]:
+                    return True
+        return False
+
     def _replan(self):
         if self.latest_map is None or self.robot_xy is None:
             return
@@ -88,6 +132,8 @@ class PlannerNode(Node):
         blocked = inflate_obstacles(
             grid, self.inflation_radius,
             self.occ_threshold, self.unknown_as_obstacle)
+
+        self._publish_inflated_debug(blocked, grid, info)
 
         start = self._world_to_cell(*self.robot_xy, info)
         goal = self._world_to_cell(self.goal_x, self.goal_y, info)
@@ -101,14 +147,62 @@ class PlannerNode(Node):
             self._publish_empty_path()
             return
 
-        # If the start cell was inflated shut (robot on the edge of a blocked
-        # cell), unblock it so A* can at least escape.
-        if blocked[start]:
-            blocked[start] = False
+        # Clear inflation halos around both endpoints. The rover is physically
+        # at `start` so inflation around it is safety buffer we're already
+        # inside; clearing it lets A* plan an escape. Same for `goal`: if the
+        # map fills in so that walls inflate over the goal cell, the rover
+        # still needs to be able to plan TO the goal. Real walls in both
+        # halos stay blocked.
+        self._clear_halo(blocked, grid, start)
+        self._clear_halo(blocked, grid, goal)
+
+        # After clearing halos, these snapshots reflect the REAL degenerate
+        # cases: goal in an actual wall, or start with no escape neighbours.
+        goal_blocked = bool(blocked[goal])
+        start_caged = not self._has_free_neighbour(blocked, start)
+
+        # Publish reachable-from-start every tick so RViz always shows the
+        # current connectivity. The boundary between the reachable region
+        # (light) and the stranded region (gray) is where A* loses
+        # connectivity. If goal lies in the gray region, that's the disconnect.
+        self._publish_reachable_debug(blocked, start, info)
 
         path_cells = astar_search(blocked, start, goal)
         if path_cells is None:
-            self._log_failure('no path found')
+            if goal_blocked:
+                gx, gy = self._cell_to_world(goal[0], goal[1], info)
+                reason = (f'goal cell blocked after inflation '
+                          f'(cell={goal}, world=({gx:.2f}, {gy:.2f}))')
+            elif start_caged:
+                sx, sy = self._cell_to_world(start[0], start[1], info)
+                reason = (f'start neighbourhood fully blocked '
+                          f'(cell={start}, world=({sx:.2f}, {sy:.2f}))')
+            else:
+                sx, sy = self._cell_to_world(start[0], start[1], info)
+                gx, gy = self._cell_to_world(goal[0], goal[1], info)
+                # Compare A*'s view with scipy's pure 8-connectivity view.
+                # If scipy says SAME component but A* still says no path,
+                # the disconnect is from anti-corner-cutting refusing a
+                # 1-cell diagonal squeeze somewhere (likely a jagged
+                # inflation corner). If scipy also says DIFFERENT, the
+                # disconnect is real geometric.
+                labels, _ = ndimage.label(
+                    ~blocked, structure=np.ones((3, 3), dtype=bool))
+                start_lbl = int(labels[start])
+                goal_lbl = int(labels[goal])
+                if start_lbl != 0 and start_lbl == goal_lbl:
+                    scipy_view = ('SAME 8-conn component — anti-corner-cutting '
+                                  'is refusing a diagonal squeeze (likely a '
+                                  'jagged inflation corner)')
+                else:
+                    scipy_view = ('DIFFERENT 8-conn components — real '
+                                  f'geometric disconnect (start_lbl={start_lbl}, '
+                                  f'goal_lbl={goal_lbl})')
+                reason = (f'no connecting path between start={start} '
+                          f'world=({sx:.2f}, {sy:.2f}) and goal={goal} '
+                          f'world=({gx:.2f}, {gy:.2f}) (graph disconnected). '
+                          f'scipy: {scipy_view}')
+            self._log_failure(reason)
             self._publish_empty_path()
             return
 
@@ -135,6 +229,50 @@ class PlannerNode(Node):
             path_msg.poses[-1].pose.position.y = self.goal_y
 
         self.path_pub.publish(path_msg)
+
+    def _publish_reachable_debug(self, blocked: np.ndarray,
+                                 start: tuple[int, int], info):
+        # Compute the 8-connected component containing `start`. This ignores
+        # anti-corner-cutting (A*'s extra restriction), so if A* says
+        # disconnected but this visualization shows start and goal in the
+        # same component, the issue is corner-cutting. If they're in
+        # different components here too, the disconnect is real geometric.
+        h, w = blocked.shape
+        if not (0 <= start[0] < h and 0 <= start[1] < w) or blocked[start]:
+            return  # nothing to flood from
+
+        labels, _ = ndimage.label(~blocked, structure=np.ones((3, 3), dtype=bool))
+        start_label = int(labels[start])
+        reachable = (labels == start_label) if start_label != 0 else np.zeros_like(blocked)
+
+        # Encode as OccupancyGrid: reachable -> 0 (light), blocked -> 100
+        # (dark), non-reachable non-blocked -> 50 (medium gray, the "stranded"
+        # region A* can't get to from the rover).
+        debug = np.full_like(blocked, 50, dtype=np.int8)
+        debug[reachable] = 0
+        debug[blocked] = 100
+
+        msg = OccupancyGridMsg()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.map_frame
+        msg.info = info
+        msg.data = debug.flatten().tolist()
+        self.reachable_pub.publish(msg)
+
+    def _publish_inflated_debug(self, blocked: np.ndarray, grid: np.ndarray, info):
+        # Build a debug OccupancyGrid showing what A* actually sees: anything
+        # blocked (originally occupied OR inflated) becomes 100, originally
+        # unknown cells that didn't get blocked stay -1, the rest stay 0.
+        debug = np.zeros_like(grid, dtype=np.int8)
+        debug[grid < 0] = -1
+        debug[blocked] = 100
+
+        msg = OccupancyGridMsg()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.map_frame
+        msg.info = info
+        msg.data = debug.flatten().tolist()
+        self.inflated_pub.publish(msg)
 
     def _publish_empty_path(self):
         empty = Path()

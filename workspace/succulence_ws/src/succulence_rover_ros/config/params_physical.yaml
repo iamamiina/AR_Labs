@@ -135,8 +135,8 @@ occupancy_grid_mapper:
       # max_range Smaller: only nearby returns trusted, smaller built map.
       # min_range Larger: ignores closer returns (filters body reflections).
       # min_range Smaller: includes closer returns (risks self-hits).
-      max_range: 3.0
-      min_range: 0.1
+      max_range: 4.0
+      min_range: 0.2
 
     # See motion_model.lidar above for offsets.
     lidar:
@@ -199,7 +199,7 @@ slam_node:
       # Smaller: scan-match edges trusted more -> faster correction but
       #   more sensitive to bad matches.
       scan_match_cov_xy: 0.003
-      scan_match_cov_theta: 0.0015
+      scan_match_cov_theta: 0.0020
 
     # See motion_model.lidar above for offsets.
     lidar:
@@ -225,7 +225,7 @@ slam_node:
       #   and the matcher will silently saturate at the boundary.
       search_x: 0.5
       search_y: 0.5
-      search_theta: 0.1
+      search_theta: 0.3
 
       # Step size when sweeping the search window.
       # Larger: fewer candidates -> faster but coarser localisation.
@@ -233,7 +233,7 @@ slam_node:
       #   in xy and linear in theta.
       resolution_x: 0.025
       resolution_y: 0.025
-      resolution_theta: 0.02
+      resolution_theta: 0.05
 
       # Minimum normalised correlation score for a scan-match to be
       # accepted as an edge.
@@ -241,7 +241,7 @@ slam_node:
       #   for scan-match edges in feature-poor areas.
       # Smaller: more matches accepted -> more edges but more noise from
       #   spurious correlations.
-      min_score: 0.45
+      min_score: 0.65
 
       # Side length of the local rasterised grid used when scoring scans.
       # Larger: matches over a larger area -> better in open spaces, more
@@ -267,8 +267,8 @@ slam_node:
       log_odds_free: 0.4
       log_odds_max: 5.0
       log_odds_min: -5.0
-      max_range: 3.0
-      min_range: 0.1
+      max_range: 4.0
+      min_range: 0.2
 
 
 # ====================================================================
@@ -290,7 +290,7 @@ planner_node:
       # Larger: stable plans, slower reaction to newly mapped obstacles.
       # Smaller: reacts faster but the path can visibly jitter as the
       #   map fills in.
-      replan_period: 5.0
+      replan_period: 2.0 #5.0
 
       # Cell value (0..100) at or above which a cell is treated as an
       # obstacle by A*.
@@ -315,15 +315,16 @@ planner_node:
       # Larger: paths stay further from obstacles; narrow gaps may
       #   inflate shut and become "no path".
       # Smaller: paths hug walls; rover may scrape corners.
-      inflation_radius_cells: 5.0
+      inflation_radius_cells: 4
 
     # Hardcoded mission goal (Kevin's location), in the map frame.
     # Increase x: goal moves east. Decrease x: goal moves west.
     # Increase y: goal moves north. Decrease y: goal moves south.
     goal:
-      x: 0.5
-      y: 2.0
-
+      x: 3.18
+      y: 0.90
+      #x=0.25
+      #y=2.35
 
 # ====================================================================
 # Week 12: Pure-Pursuit Navigator
@@ -352,19 +353,19 @@ navigator_node:
       # Larger: faster mission completion but stresses scan matching and
       #   widens turning radius at the controller.
       # Smaller: slower but safer; better localisation and tighter turns.
-      max_linear_v: 0.25
+      max_linear_v: 0.15 #0.25
 
       # Maximum angular speed in rad/s.
       # Larger: tighter turns possible at speed, harder on scan matching
       #   (rotation is the failure mode).
       # Smaller: rover spins more slowly; may struggle on sharp corners.
-      max_angular_v: 0.15
+      max_angular_v: 0.15 #0.15
 
       # Distance to the goal at which the navigator declares arrival
       # and stops.
       # Larger: stops further from the exact goal; more forgiving.
       # Smaller: stops closer; may overshoot or miss in noisy odometry.
-      goal_tolerance: 0.05
+      goal_tolerance: 0.1
 
       # Seconds without a fresh plan before the navigator stops the rover
       # as a safety fallback. Must comfortably exceed `replan_period`.
@@ -373,3 +374,4 @@ navigator_node:
       # Smaller: faster emergency stop, may trigger spuriously between
       #   normal replans.
       plan_timeout: 6.0
+
