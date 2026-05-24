@@ -1,3 +1,15 @@
+# Algorithmic Robotics - 12062
+
+**Contains the final code for Operation Find Kevin**
+*for the group made up of :*
+
+    Amina:   u3275670
+    Phoebe:  u3283467
+    Dylan:   u3284475 
+
+***
+In this project we integrated components developed throughout the semester into one final rescue mission demonstration. Combining our SLAM implementation for ground robot localization and mapping, and implementation of A* path planning to successfully path to and reach a goal loaction on the simulated martian surface.
+
 # Succulence Rover Setup and Launch Guide
 
 Follow the setup instructions from the official repository to start either the simulation Docker environment or the physical robot Docker environment:
